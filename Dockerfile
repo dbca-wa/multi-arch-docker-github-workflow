@@ -1,22 +1,27 @@
-# Simple Dockerfile to demonstrate the use of the multiarch on native architecture.
-# This Dockerfile is based on the latest Alpine Linux image.
-# The `uname` command is used to display system information.
-FROM alpine:latest
-RUN echo "Building a multiarch image for the latest Alpine Linux version" \
-    && echo "This image will run on any architecture supported by Alpine Linux" \
-    && echo "The default command will display system information using the `uname` command" \
-    && echo "The `uname` command is used to print system information, including the kernel name, version, and architecture"
+# syntax=docker/dockerfile:1
+FROM python:3.13-slim-bookworm AS builder_base
 
-RUN echo 'System Information:' \
-    && uname -a \
-    && echo 'Hello, World!' \
-    && echo 'Current Date and Time:' \
-    && date
+ENV UV_LINK_MODE=copy \
+  UV_COMPILE_BYTECODE=1 \
+  UV_PYTHON_DOWNLOADS=never \
+  UV_PROJECT_ENVIRONMENT=/app/.venv
 
+COPY --from=ghcr.io/astral-sh/uv:0.7 /uv /uvx /bin/
+COPY pyproject.toml uv.lock /_lock/
+RUN --mount=type=cache,target=/root/.cache \
+  cd /_lock && \
+  uv sync --frozen --no-dev
 
-# Set the default command to run when the container starts
-# This command will echo the system information using `uname -a`, a hello world message, and the current date and time to stdout, then exit cleanly.
-CMD ["sh", "-c", "echo 'System Information:' && uname -a && echo 'Hello, World!' && echo 'Current Date and Time:' && date"]
-# The `uname -a` command prints all system information, including the kernel name, version, and architecture.
+##################################################################################
 
+FROM python:3.13-slim-bookworm
 
+# Create a non-root user.
+RUN groupadd -r -g 1000 app \
+  && useradd -r -u 1000 -d /app -g app -N app
+
+COPY --from=builder_base --chown=app:app /app /app
+ENV PATH=/app/.venv/bin:$PATH \
+  PYTHONUNBUFFERED=1
+USER app
+CMD ["python", "--version"]
