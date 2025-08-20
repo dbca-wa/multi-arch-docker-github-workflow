@@ -65,8 +65,7 @@ jobs:
     name: Build Docker image for ${{ matrix.platform }}
 
     steps:
-      -
-        name: Prepare environment for current platform 
+      - name: Prepare environment for current platform
         # This step sets up the environment for the current platform being built.
         # It replaces the '/' character in the platform name with '-' and sets it as an environment variable.
         # This is useful for naming artifacts and other resources that cannot contain '/'.
@@ -117,7 +116,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-
       - name: Build and push by digest
         # This step builds and pushes the Docker image using Buildx.
         # It uses the docker/build-push-action to build the image with the specified context and platforms.
@@ -138,7 +136,6 @@ jobs:
           cache-from: type=gha,scope=${{ github.repository }}-${{ github.ref_name }}-${{ matrix.platform }}
           cache-to: type=gha,scope=${{ github.repository }}-${{ github.ref_name }}-${{ matrix.platform }}
 
-
       - name: Export digest
         # This step exports the digest of the built image to a file.
         # It creates a directory in /tmp/digests and saves the digest of the image to a file.
@@ -153,14 +150,13 @@ jobs:
         # This step uploads the digest file to the GitHub Actions artifact storage.
         # It uses the actions/upload-artifact action to upload the file created in the previous step.
         # The artifact is named digests-${{ env.PLATFORM_PAIR }}, where PLATFORM_PAIR is the platform name with '/' replaced by '-'.
-        # The artifact is retained for 1 day, and if no files are found, it will throw an error.      
+        # The artifact is retained for 1 day, and if no files are found, it will throw an error.
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: digests-${{ env.PLATFORM_PAIR }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
-
 
   merge:
     # This job merges the Docker manifests for the different platforms built in the previous job.
@@ -196,7 +192,6 @@ jobs:
           path: /tmp/digests
           pattern: digests-*
           merge-multiple: true
-
 
       - name: Docker meta
         # This step generates metadata for the Docker image.
@@ -247,13 +242,13 @@ jobs:
         id: manifest-annotate
         continue-on-error: true
         run: |
-              docker buildx imagetools create \
-                $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-                --annotation='index:org.opencontainers.image.description=${{ github.event.repository.description }}' \
-                --annotation='index:org.opencontainers.image.created=${{ steps.timestamp.outputs.timestamp }}' \
-                --annotation='index:org.opencontainers.image.url=${{ github.event.repository.url }}' \
-                --annotation='index:org.opencontainers.image.source=${{ github.event.repository.url }}' \
-                $(printf '${{ env.GHCR_IMAGE }}@sha256:%s ' *)
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            --annotation='index:org.opencontainers.image.description=${{ github.event.repository.description }}' \
+            --annotation='index:org.opencontainers.image.created=${{ steps.timestamp.outputs.timestamp }}' \
+            --annotation='index:org.opencontainers.image.url=${{ github.event.repository.url }}' \
+            --annotation='index:org.opencontainers.image.source=${{ github.event.repository.url }}' \
+            $(printf '${{ env.GHCR_IMAGE }}@sha256:%s ' *)
 
       - name: Create manifest list and push without annotations
         # This step creates a manifest list for the Docker images built for different platforms.
@@ -263,8 +258,8 @@ jobs:
         if: steps.manifest-annotate.outcome == 'failure'
         working-directory: /tmp/digests
         run: |
-              docker buildx imagetools create  $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-                $(printf '${{ env.GHCR_IMAGE }}@sha256:%s ' *)
+          docker buildx imagetools create  $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.GHCR_IMAGE }}@sha256:%s ' *)
 
       - name: Inspect image
         # This step inspects the created manifest list to verify its contents.
@@ -273,3 +268,33 @@ jobs:
         id: inspect
         run: |
           docker buildx imagetools inspect '${{ env.GHCR_IMAGE }}:${{ steps.meta.outputs.version }}'
+
+  scan:
+    # This job scans the merged Docker manifest produced in the previous job for security vulnerabilities
+    # and uploads any to the GitHub Security tab.
+    name: Docker image vulnerability scan
+    runs-on: ubuntu-latest
+    needs:
+      - merge
+      # This job depends on the merge job to complete before it starts.
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    steps:
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        env:
+          TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db
+        with:
+          scan-type: 'image'
+          scanners: 'vuln'
+          image-ref: ${{ env.GHCR_IMAGE }}
+          vuln-type: 'os,library'
+          severity: 'HIGH,CRITICAL'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+      - name: Upload scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
